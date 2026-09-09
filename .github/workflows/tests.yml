@@ -26,4 +26,6 @@ jobs:
       - name: Verify package installation
         run: |
           python -m pip install .
+          toolfit --help
           ate-scan --help
+          toolfit . --source builtin --offline --task "python testing"

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ate_opportunity_scanner import core
+from toolfit import core
 
 
 class MetadataPrivacyTests(unittest.TestCase):
@@ -122,9 +122,9 @@ class RankingTests(unittest.TestCase):
         candidate = core.rank_candidates(self.context, self.rows, limit=1)[0]
         report = core.render_report(self.context, [candidate])
         self.assertNotIn("/tmp/dashboard", report)
-        self.assertIn("MCP opportunities for dashboard", report)
+        self.assertIn("ToolFit recommendations for dashboard", report)
         self.assertIn("An MCP tool is a callable function", report)
-        self.assertIn("until you delete it", report)
+        self.assertIn("until you delete them", report)
         self.assertIn("Agent configuration check: not requested", report)
         self.assertIn("Considered", report)
 
@@ -246,10 +246,12 @@ class RankingTests(unittest.TestCase):
         self.assertNotIn("<script>", report)
         self.assertIn("\\[click\\]", report)
 
-    def test_existing_server_is_not_recommended(self):
+    def test_existing_server_is_recommended_with_configuration_evidence(self):
         self.context.installed_servers.add("browser-a11y")
         candidates = core.rank_candidates(self.context, self.rows, limit=2)
-        self.assertTrue(all(candidate.row["server_name"] != "browser-a11y" for candidate in candidates))
+        self.assertEqual(candidates[0].row["server_name"], "browser-a11y")
+        self.assertEqual(candidates[0].availability, "configured")
+        self.assertIn("not tested", candidates[0].availability_evidence)
 
     def test_report_signals_do_not_disclose_private_project_terms(self):
         context = core.ProjectContext(root=Path("/tmp/privatecodename"))

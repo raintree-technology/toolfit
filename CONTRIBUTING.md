@@ -10,4 +10,6 @@ Before opening a pull request:
 4. Explain any new network request and the exact data it transmits.
 5. Preserve the experimental status unless evidence supports a stronger claim.
 
-Do not add the ATE dataset, tool descriptions, scan reports, or private repository metadata to this repository.
+Do not add downloaded catalogs, third-party dataset descriptions, scan reports, or private repository metadata to this repository.
+
+For built-in catalog entries, write an original description, cite primary documentation, record the review date, and state applicability and access requirements.

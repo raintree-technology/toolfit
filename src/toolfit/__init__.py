@@ -1,4 +1,4 @@
-"""ATE MCP Opportunity Scanner."""
+"""ToolFit."""
 
 from .cli import main
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-09-08
+
+- Rename the product and primary command to ToolFit; keep `ate-scan` as an alias.
+- Publish the Python distribution as `raintree-toolfit` because the `toolfit`
+  name belongs to an unrelated project on PyPI.
+- Add task-aware ranking and recommend relevant existing capabilities first.
+- Combine ATE, the official MCP Registry, a built-in catalog, local catalogs, and plugin marketplaces.
+- Detect declared dependencies, configured plugins, and local skill metadata.
+- Report source dates, availability evidence, requirements, and remaining checks.
+- Restrict MCP configuration templates to MCP candidates.
+
 ## 0.1.3 — 2026-09-04
 
 - Verify explicit MCP transports from each candidate repository's public README and root package metadata.

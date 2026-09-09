@@ -4,7 +4,7 @@ Use this guide only after you review a candidate's source, permissions, data des
 
 Keep credentials in environment variables or the agent's supported credential store. Do not commit secrets to a project configuration. Obtain the server command, arguments, and authentication instructions from the reviewed server's publisher before you begin.
 
-Generate an inert starting point with `ate-scan PROJECT --review-config mcp-configuration-review.md`. The bundle uses `.review` filenames, placeholder commands, and placeholder server-side read-only arguments. It does not modify a client configuration. Treat the bundle as a review worksheet, not as an installation file.
+Generate an inert starting point with `toolfit PROJECT --review-config mcp-configuration-review.md`. The bundle uses `.review` filenames, placeholder commands, and placeholder server-side read-only arguments. It does not modify a client configuration. Treat the bundle as a review worksheet, not as an installation file.
 
 No common client setting can turn every unknown MCP server into a read-only server. Verify a server-specific read-only mode and expose only reviewed read operations before activation.
 

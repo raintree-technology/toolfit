@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ate_opportunity_scanner.cli import main
+from toolfit.cli import main
 
 
 class CliTests(unittest.TestCase):

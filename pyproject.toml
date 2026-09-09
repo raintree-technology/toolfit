@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ate-mcp-opportunity-scanner"
-version = "0.1.3"
-description = "Find candidate MCP tools for local projects without uploading project data."
+name = "raintree-toolfit"
+version = "0.2.0"
+description = "Find tools and agent capabilities that fit your work, without uploading project data."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -20,14 +20,18 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-ate-scan = "ate_opportunity_scanner:main"
+toolfit = "toolfit:main"
+ate-scan = "toolfit:main"
 
 [project.urls]
-Homepage = "https://github.com/admin-raintree/ate-mcp-opportunity-scanner"
-Issues = "https://github.com/admin-raintree/ate-mcp-opportunity-scanner/issues"
+Homepage = "https://github.com/admin-raintree/toolfit"
+Issues = "https://github.com/admin-raintree/toolfit/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+toolfit = ["capabilities.jsonl"]

@@ -20,7 +20,7 @@ from typing import Iterable, Iterator, Mapping
 
 DATASET = "CohereLabs/ATE"
 DATASET_API = "https://datasets-server.huggingface.co"
-USER_AGENT = "ate-mcp-opportunity-scanner/0.1.3 (+https://github.com/admin-raintree/ate-mcp-opportunity-scanner)"
+USER_AGENT = "toolfit/0.2.0 (+https://github.com/admin-raintree/toolfit)"
 MAX_FILE_BYTES = 256_000
 MAX_FILES = 1_000
 MAX_CATALOG_ROWS = 100_000
@@ -141,7 +141,7 @@ TRANSPORT_PATTERNS = {
 PERMISSION_SIGNALS = {
     "credentials": {"credential", "credentials", "secret", "token", "oauth", "authentication"},
     "filesystem": {"file", "files", "filesystem", "directory", "folder"},
-    "code execution": {"execute", "shell", "terminal", "command", "script", "sudo"},
+    "code execution": {"execute", "execution", "shell", "terminal", "command", "script", "sudo"},
     "network": {"network", "http", "browser", "download", "upload", "api"},
     "database": {"database", "query", "schema", "migration", "postgres", "mysql", "sqlite"},
     "communications": {"email", "message", "send", "publish", "post"},
@@ -151,7 +151,7 @@ PERMISSION_SIGNALS = {
 AGGREGATOR_MARKERS = {"awesome", "skillranking", "ecosystem", "collection", "directory"}
 HIGH_RISK_TERMS = {
     "delete", "irreversible", "payment", "purchase", "refund", "shell", "terminal",
-    "credential", "secret", "private-key", "sudo", "deploy", "execute", "trade",
+    "credential", "secret", "private-key", "sudo", "deploy", "execute", "execution", "trade",
 }
 MEDIUM_RISK_TERMS = {
     "create", "edit", "update", "write", "send", "upload", "download", "browser",
@@ -175,6 +175,12 @@ class ProjectContext:
     workflows: dict[str, list[str]] = field(default_factory=dict)
     installed_servers: set[str] = field(default_factory=set)
     agent_configs_checked: bool = False
+    task: str = ""
+    task_terms: Counter[str] = field(default_factory=Counter)
+    enabled_plugins: set[str] = field(default_factory=set)
+    declared_packages: set[str] = field(default_factory=set)
+    available_rows: list[dict[str, str]] = field(default_factory=list)
+    source_status: list[str] = field(default_factory=list)
     files_seen: int = 0
     files_skipped: int = 0
 
@@ -194,6 +200,10 @@ class Candidate:
     maintenance: str = "unknown"
     permission_signals: list[str] = field(default_factory=list)
     security_review: str = "required"
+    availability: str = "new"
+    availability_evidence: str = "No availability evidence"
+    task_fit: list[str] = field(default_factory=list)
+    provenance: list[dict[str, str]] = field(default_factory=list)
 
 
 def tokenize(text: str) -> Counter[str]:
@@ -384,7 +394,9 @@ def collect_context(
     root: Path,
     max_files: int = MAX_FILES,
     include_agent_configs: bool = False,
+    task: str = "",
 ) -> ProjectContext:
+    from .available import configured_plugins, package_names, skill_rows
     root = root.expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"not a directory: {root}")
@@ -397,6 +409,9 @@ def collect_context(
         installed_servers=detected_server_names() if include_agent_configs else set(),
         agent_configs_checked=include_agent_configs,
     )
+    context.task = task
+    context.task_terms = tokenize(task)
+    expand_capabilities(context.task_terms)
     workflow_sources: dict[str, str] = {}
     context.terms.update(tokenize(root.name))
     for current, directory_names, file_names in os.walk(root, followlinks=False):
@@ -421,6 +436,7 @@ def collect_context(
                 context.terms[capability] += 1
             if filename.lower() in MANIFEST_NAMES:
                 context.installed_servers.update(configured_server_names(path))
+                context.declared_packages.update(package_names(path))
                 terms = metadata_terms(path, workflow_sources)
                 if terms:
                     context.terms.update(terms)
@@ -431,12 +447,21 @@ def collect_context(
         if set(context.terms).intersection(triggers)
     ]
     context.workflows = detect_workflows(root, workflow_sources)
+    for base in [root, *([Path.home()] if include_agent_configs else [])]:
+        for config in (".codex/config.toml", ".claude/settings.json"):
+            config_path = base / config
+            if not config_path.parent.is_symlink():
+                context.enabled_plugins.update(configured_plugins(config_path))
+        for folder in (".agents/skills", ".codex/skills", ".claude/skills"):
+            context.available_rows.extend(skill_rows(base / folder))
     return context
 
 
 def default_cache_path() -> Path:
     base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return base / "ate-mcp-opportunity-scanner" / "onet-good.jsonl"
+    current = base / "toolfit" / "ate.jsonl"
+    legacy = base / "ate-mcp-opportunity-scanner" / "onet-good.jsonl"
+    return legacy if not current.is_file() and legacy.is_file() else current
 
 
 def _request_json(endpoint: str, parameters: Mapping[str, str | int], retries: int = 7) -> dict:
@@ -537,17 +562,20 @@ def classify_risk(text: str) -> tuple[str, list[str]]:
 
 
 def rank_candidates(context: ProjectContext, rows: Iterable[dict[str, str]], limit: int = 20) -> list[Candidate]:
+    from .available import availability
+
     prepared: list[tuple[dict[str, str], Counter[str]]] = []
     document_frequency: Counter[str] = Counter()
     for row in rows:
+        required_signals = set(tokenize(row.get("project_signals", "")))
+        if required_signals and not required_signals.intersection(set(context.terms) | set(context.task_terms)):
+            continue
         description = str(row.get("tool_description") or "").strip()
         server_name = str(row.get("server_name") or "").lower()
-        if server_name in context.installed_servers:
-            continue
         if len(description) < 20 or any(marker in server_name for marker in AGGREGATOR_MARKERS):
             continue
         candidate_terms = tokenize(" ".join(str(row.get(key, "")) for key in (
-            "tool_name", "server_name", "tool_description", "task_text", "occupation_title"
+            "tool_name", "server_name", "tool_description", "task_text", "occupation_title", "requirements"
         )))
         expand_capabilities(candidate_terms)
         prepared.append((row, candidate_terms))
@@ -570,8 +598,12 @@ def rank_candidates(context: ProjectContext, rows: Iterable[dict[str, str]], lim
                 continue
             inverse_frequency = math.log((document_count + 1) / (frequency + 1)) + 1
             weighted[term] = inverse_frequency * (1 + math.log1p(context.terms[term]))
+        task_hits = sorted(set(context.task_terms).intersection(candidate_terms))
+        # ponytail: lexical task matching; add semantic ranking only after held-out relevance evaluation.
+        if context.task_terms and not task_hits:
+            continue
         profile_term_count = len(set().union(*opportunity_hits.values())) if opportunity_hits else 0
-        if len(weighted) < 2 and profile_term_count < 2:
+        if len(weighted) < 2 and profile_term_count < 2 and not task_hits:
             continue
         numerator = sum(
             weight
@@ -590,18 +622,19 @@ def rank_candidates(context: ProjectContext, rows: Iterable[dict[str, str]], lim
             score += min(math.sqrt(max(float(stars), 0.0)), 50.0) / 2.0
         except (TypeError, ValueError):
             pass
-        description = f"{row.get('tool_name', '')} {row.get('tool_description', '')}"
+        description = f"{row.get('tool_name', '')} {row.get('tool_description', '')} {row.get('access', '')}"
         risk_level, risk_signals = classify_risk(description)
         candidate_term_set = set(candidate_terms)
         workflow_fit = [
             workflow for workflow, triggers in WORKFLOW_PROFILES.items()
             if workflow in context.workflows and candidate_term_set.intersection(triggers)
         ]
-        score += 6.0 * len(workflow_fit)
+        score += 6.0 * len(workflow_fit) + 20.0 * len(task_hits)
         if risk_level == "high":
             score *= 0.75
         elif risk_level == "medium":
             score *= 0.9
+        available, available_evidence = availability(context, row)
         ranked.append(Candidate(
             score=score,
             row=row,
@@ -615,27 +648,42 @@ def rank_candidates(context: ProjectContext, rows: Iterable[dict[str, str]], lim
             risk_level=risk_level,
             risk_signals=risk_signals,
             workflow_fit=workflow_fit,
+            availability=available,
+            availability_evidence=available_evidence,
+            task_fit=task_hits,
+            provenance=[{key: row.get(key, "") for key in (
+                "source_name", "source_url", "source_updated_at", "source_checked_at"
+            )}],
         ))
 
-    ranked.sort(key=lambda candidate: candidate.score, reverse=True)
+    ranked.sort(key=lambda candidate: (
+        candidate.availability == "new", -candidate.score,
+        str(candidate.row.get("tool_name", "")), str(candidate.row.get("source_name", "")),
+    ))
     results: list[Candidate] = []
-    seen: set[str] = set()
+    seen: dict[tuple, Candidate] = {}
     for candidate in ranked:
-        identity = re.sub(r"[^a-z0-9]+", "", str(candidate.row.get("tool_name") or "").lower())
-        if not identity:
-            identity = str(candidate.row.get("mcp_id") or candidate.row.get("server_name"))
+        row = candidate.row
+        # Never collapse unrelated publishers merely because their tool names match.
+        publisher = row.get("github_url") or row.get("server_name") or row.get("source_name", "")
+        identity = (row.get("kind", "mcp"), publisher.lower().removesuffix(".git").rstrip("/"),
+                    str(row.get("tool_name", "")).lower())
         if identity in seen:
+            prior = seen[identity]
+            for source in candidate.provenance:
+                if source not in prior.provenance:
+                    prior.provenance.append(source)
             continue
-        seen.add(identity)
+        seen[identity] = candidate
         results.append(candidate)
-        if len(results) >= limit:
-            break
-    return results
+    return results[:limit]
 
 
 def detect_transports(candidate: Candidate) -> list[str]:
-    """Return transports named by ATE metadata; absence means compatibility is unknown."""
-    text = " ".join(str(value) for value in candidate.row.values()).lower()
+    """Return explicit catalog transports; absence means compatibility is unknown."""
+    text = " ".join(str(candidate.row.get(key, "")) for key in (
+        "tool_description", "task_text", "transports"
+    )).lower()
     return sorted(name for name, pattern in TRANSPORT_PATTERNS.items() if pattern.search(text))
 
 
@@ -648,7 +696,7 @@ def assess_candidate(candidate: Candidate) -> None:
         if matches:
             evidence = []
             for transport in matches:
-                sources = (["ATE metadata"] if transport in metadata_transports else []) + candidate.transport_evidence.get(transport, [])
+                sources = ([candidate.row.get("source_name", "ATE metadata")] if transport in metadata_transports else []) + candidate.transport_evidence.get(transport, [])
                 evidence.append(f"{transport} in {', '.join(dict.fromkeys(sources))}")
             candidate.compatibility[client] = (
                 f"possible via {'; '.join(evidence)}; configuration and authentication not tested"
@@ -659,10 +707,14 @@ def assess_candidate(candidate: Candidate) -> None:
             )
         else:
             candidate.compatibility[client] = (
-                "unknown; no explicit transport found in ATE or attempted repository metadata"
+                "unknown; no explicit transport found in catalog or attempted repository metadata"
                 if candidate.repository_transport_checked
-                else "unknown; ATE metadata does not identify a transport"
+                else "unknown; catalog metadata does not identify a transport"
             )
+
+    if candidate.row.get("kind", "mcp") != "mcp":
+        candidate.compatibility = {"Requirements": candidate.row.get("requirements") or
+                                   "Verify runtime, platform and client requirements; operation not tested"}
 
     repository = candidate.repository or {}
     warnings = [str(item) for item in repository.get("warnings", [])]
@@ -676,13 +728,13 @@ def assess_candidate(candidate: Candidate) -> None:
         try:
             age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(pushed.replace("Z", "+00:00"))).days
             candidate.maintenance = "stale" if age_days > 730 else "recently updated" if age_days <= 365 else "aging"
-        except ValueError:
+        except (ValueError, TypeError):
             candidate.maintenance = "unknown"
     else:
         candidate.maintenance = "unknown"
 
     text_terms = set(tokenize(" ".join(str(candidate.row.get(key, "")) for key in (
-        "tool_name", "server_name", "tool_description", "task_text"
+        "tool_name", "server_name", "tool_description", "task_text", "access"
     ))))
     candidate.permission_signals = sorted(
         category for category, terms in PERMISSION_SIGNALS.items() if text_terms.intersection(terms)
@@ -801,7 +853,7 @@ def enrich_candidates(
                 warnings.append("ATE recorded this repository as archived.")
             candidate.repository = {
                 "url": repository_url,
-                "status": "ATE metadata only" if offline else "pending live screen",
+                "status": "catalog metadata only" if offline else "pending live screen",
                 "warnings": warnings,
             }
         else:
@@ -810,7 +862,7 @@ def enrich_candidates(
             assess_candidate(candidate)
             continue
         server: dict[str, object] | None = None
-        if not repository_url:
+        if not repository_url and candidate.row.get("mcp_id"):
             try:
                 server = resolve_server(str(candidate.row.get("mcp_id", "")))
             except RuntimeError:
@@ -845,65 +897,85 @@ def _markdown_text(value: object, limit: int | None = None) -> str:
     return text
 
 
+def _source_link(label: str, url: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password:
+            safe = urllib.parse.quote(url, safe="/:?&=%#")
+            return f"[{_markdown_text(label)}]({safe})"
+    except ValueError:
+        pass
+    return _markdown_text(label) + " (no verified source URL)"
+
+
 def render_report(context: ProjectContext, candidates: list[Candidate]) -> str:
-
-    def shortened(value: object, limit: int = 500) -> str:
-        text = re.sub(r"\s+", " ", str(value)).strip()
-        if len(text) <= limit:
-            return text
-        boundary = text.rfind(" ", 0, limit - 1)
-        return text[:boundary if boundary > 0 else limit - 1].rstrip() + "…"
-
     if context.agent_configs_checked:
-        agent_status = ", ".join(context.detected_agents) if context.detected_agents else "no recognized agent folders found"
+        agent_status = ", ".join(context.detected_agents) or "no recognized agent folders found"
     else:
         agent_status = "not requested; pass --include-agent-configs to check"
-
     lines = [
-        f"# MCP opportunities for {_markdown_text(context.root.name)}", "",
-        "An MCP tool is a callable function. An MCP server provides one or more MCP tools.", "",
-        f"Scanned locally at {datetime.now(timezone.utc).isoformat()}. No project content was uploaded. This report remains at the location you selected until you delete it.", "",
+        f"# ToolFit recommendations for {_markdown_text(context.root.name)}", "",
+        "Relevant capabilities with local availability evidence appear before new additions.", "",
+        f"Task: {_markdown_text(context.task) if context.task else 'repository overview; no task supplied'}", "",
+        f"Scanned locally at {datetime.now(timezone.utc).isoformat()}. No project content was uploaded.",
+        "The task and report remain in your terminal or selected output until you delete them.", "",
         f"Agent configuration check: {agent_status}", "",
-        f"Opportunity classes: {', '.join(context.opportunities) if context.opportunities else 'no strong signal'}", "",
-        "Observed repository workflows:",
-        *(
-            [f"- {_markdown_text(name)} ({_markdown_text(', '.join(sources))})" for name, sources in context.workflows.items()]
-            or ["- No concrete workflow signal detected"]
-        ),
-        "",
-        f"Configured MCP server names found in the scanned scope: {len(context.installed_servers)}", "",
-        f"Considered {context.files_seen} filenames and read {len(context.metadata_files)} approved metadata files.", "",
-        "## Candidates", "",
+        f"Considered {context.files_seen} filenames and read {len(context.metadata_files)} approved metadata files.",
+        f"Found {len(context.declared_packages)} declared packages, {len(context.installed_servers)} configured MCP server names, {len(context.enabled_plugins)} enabled plugin names, and {len(context.available_rows)} local skills.", "",
+        "## Source coverage", "",
+        *[f"- {_markdown_text(status)}" for status in context.source_status], "",
+        "## Observed workflows", "",
+        *([f"- {_markdown_text(name)} ({_markdown_text(', '.join(sources))})"
+           for name, sources in context.workflows.items()] or ["- No concrete workflow signal detected."]), "",
+        "## Recommendations", "",
     ]
+    if not candidates:
+        lines.extend(["No candidates matched the available metadata. Try a more specific task or add another catalog.", ""])
     for index, candidate in enumerate(candidates, 1):
         row = candidate.row
-        name = _markdown_text(row.get("tool_name") or "Unnamed tool")
-        server = _markdown_text(row.get("server_name") or "Unknown server")
-        description = _markdown_text(shortened(row.get("tool_description") or row.get("task_text") or "No description"))
+        description = re.sub(r"\s+", " ", row.get("tool_description") or row.get("task_text") or "No description").strip()
+        if len(description) > 500:
+            boundary = description.rfind(" ", 0, 499)
+            description = description[:boundary if boundary > 0 else 499] + "…"
         lines.extend([
-            f"{index}. **{name}** from **{server}**", "",
-            f"   - Published description: {description}",
+            f"{index}. **{_markdown_text(row.get('tool_name', 'Unnamed capability'))}** ({_markdown_text(row.get('kind', 'mcp'))})", "",
+            f"   - Published description: {_markdown_text(description)}",
+            f"   - Availability: {_markdown_text(candidate.availability)}. {_markdown_text(candidate.availability_evidence)}.",
+            f"   - Task fit: {_markdown_text(', '.join(candidate.task_fit)) if context.task else 'no task supplied'}",
             f"   - Matching signals: {_markdown_text(', '.join(candidate.signals))}",
-            f"   - Repository workflow fit: {_markdown_text(', '.join(candidate.workflow_fit) if candidate.workflow_fit else 'no direct workflow match')}",
-            f"   - Action risk: {candidate.risk_level}" + (f" ({', '.join(candidate.risk_signals)})" if candidate.risk_signals else ""),
-            f"   - Permission signals: {_markdown_text(', '.join(candidate.permission_signals) if candidate.permission_signals else 'none detected in published metadata')}",
+            f"   - Repository workflow fit: {_markdown_text(', '.join(candidate.workflow_fit) or 'no direct workflow match')}",
+            f"   - Access: {_markdown_text(row.get('access') or 'not specified; verify publisher requirements')}",
+            f"   - Permission signals: {_markdown_text(', '.join(candidate.permission_signals) or 'none detected in published metadata')}",
+            f"   - Action risk: {candidate.risk_level}; security review: {_markdown_text(candidate.security_review)}",
             f"   - Maintenance: {_markdown_text(candidate.maintenance)}",
-            f"   - Security review: {_markdown_text(candidate.security_review)}",
         ])
+        for source in candidate.provenance or [{key: row.get(key, '') for key in ('source_name', 'source_url', 'source_updated_at', 'source_checked_at')}]:
+            lines.extend([
+                f"   - Source: {_source_link(source.get('source_name') or 'Unspecified catalog', source.get('source_url', ''))}",
+                f"   - Source updated: {_markdown_text(source.get('source_updated_at') or 'unknown')}; retrieved or reviewed: {_markdown_text(source.get('source_checked_at') or 'unknown')}.",
+            ])
         for client, result in candidate.compatibility.items():
-            lines.append(f"   - {client} compatibility: {_markdown_text(result)}")
+            lines.append(f"   - {_markdown_text(client)}: {_markdown_text(result)}")
         if candidate.repository:
-            lines.append(f"   - Repository: {_markdown_text(candidate.repository.get('url'))}")
+            lines.append(f"   - Repository: {_source_link('Repository source', str(candidate.repository.get('url', '')))}")
             lines.append(f"   - Repository screen: {_markdown_text(candidate.repository.get('status'))}")
-            warnings = candidate.repository.get("warnings")
-            if warnings:
-                lines.append(f"   - Repository warnings: {_markdown_text(' '.join(str(item) for item in warnings))}")
-        else:
-            lines.append("   - Repository: unresolved; search and verify the server manually")
-        lines.extend([f"   - Match score: {candidate.score:.1f}", ""])
+            warnings = candidate.repository.get('warnings') or [candidate.repository.get('warning', '')]
+            for warning in warnings:
+                if warning:
+                    lines.append(f"   - Repository warning: {_markdown_text(warning)}")
+        lines.extend([
+            "   - Still to verify: publisher identity, required access, runtime or client support, and behavior on this project.",
+            f"   - Match score: {candidate.score:.1f}", "",
+        ])
     lines.extend([
         "## Interpretation", "",
-        "These results are discovery leads, not compatibility or security approvals. Compatibility states describe only explicit transports found in published ATE metadata or bounded public repository documentation and package metadata; the scanner did not install, authenticate to, or run a server. Cohere classified tool descriptions with a language model; it did not execute the tools. Action-risk and permission labels come from keyword classifiers. Match scores are internal ranking values with no fixed maximum; they are not probabilities. Compare scores only within this report. Review source code, permissions, maintenance, data handling, and destructive actions before installation.", "",
+        "An MCP tool is a callable function. An MCP server provides one or more MCP tools.",
+        "Plugins, skills, developer tools, and native features have different setup requirements.", "",
+        "These recommendations are discovery leads, not compatibility or security approvals.",
+        "Dependency declarations and configuration names do not prove that a capability is installed, enabled, or working.",
+        "Transport evidence only suggests possible MCP client compatibility. ToolFit did not install, authenticate to, or run a recommended capability.",
+        "ATE matches were classified from descriptions, not tool execution. Source dates describe catalog evidence, not tested compatibility or maintenance approval.",
+        "Task fit, risk labels, and permission signals use lexical rules. Scores are ranking values, not probabilities; compare them only within this report.", "",
     ])
     return "\n".join(lines)
 
@@ -914,6 +986,7 @@ def _review_label(value: object) -> str:
 
 def render_review_config(context: ProjectContext, candidates: list[Candidate]) -> str:
     """Render inert client templates for human review without installing a server."""
+    candidates = [candidate for candidate in candidates if candidate.row.get("kind", "mcp") == "mcp"]
     lines = [
         "# MCP configuration review bundle",
         "",
@@ -942,10 +1015,8 @@ def render_review_config(context: ProjectContext, candidates: list[Candidate]) -
             "",
         ])
     if not candidates:
-        lines.extend([
-            "No candidate passed the repository relevance filter, so this bundle contains no configuration.",
-            "",
-        ])
+        lines.append("No MCP candidates matched. No client configuration templates were generated.")
+        return "\n".join(lines)
     lines.extend([
         "## Reusable client templates",
         "",
