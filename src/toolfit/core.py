@@ -20,7 +20,7 @@ from typing import Iterable, Iterator, Mapping
 
 DATASET = "CohereLabs/ATE"
 DATASET_API = "https://datasets-server.huggingface.co"
-USER_AGENT = "toolfit/0.2.0 (+https://github.com/admin-raintree/toolfit)"
+USER_AGENT = "toolfit/0.2.0 (+https://github.com/raintree-technology/toolfit)"
 MAX_FILE_BYTES = 256_000
 MAX_FILES = 1_000
 MAX_CATALOG_ROWS = 100_000

@@ -24,8 +24,8 @@ toolfit = "toolfit:main"
 ate-scan = "toolfit:main"
 
 [project.urls]
-Homepage = "https://github.com/admin-raintree/toolfit"
-Issues = "https://github.com/admin-raintree/toolfit/issues"
+Homepage = "https://github.com/raintree-technology/toolfit"
+Issues = "https://github.com/raintree-technology/toolfit/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

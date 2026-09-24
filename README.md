@@ -24,7 +24,7 @@ installed command. The old `ate-scan` command remains an alias. The Python packa
 is now `toolfit`; update imports and module invocations that used the old name.
 The Python distribution is `raintree-toolfit` because an unrelated project owns
 the `toolfit` name on PyPI.
-The GitHub repository is [admin-raintree/toolfit](https://github.com/admin-raintree/toolfit).
+The GitHub repository is [raintree-technology/toolfit](https://github.com/raintree-technology/toolfit).
 
 ## Choose the sources
 

@@ -2,7 +2,7 @@
 
 ## Report a vulnerability
 
-Do not open a public issue for a suspected vulnerability. Send a report through [GitHub's private vulnerability reporting form](https://github.com/admin-raintree/toolfit/security/advisories/new).
+Do not open a public issue for a suspected vulnerability. Send a report through [GitHub's private vulnerability reporting form](https://github.com/raintree-technology/toolfit/security/advisories/new).
 
 Include the affected version, reproduction steps, impact, and any suggested remediation. Do not include credentials or private project content.
 
